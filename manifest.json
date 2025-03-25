@@ -1,0 +1,35 @@
+{
+    "manifest_version": 3,
+    "name": "Flash OTP",
+    "version": "1.0",
+    "description": "Fetches verification codes from your Gmail with one click for seamless logins.",
+    "permissions": [
+      "identity",
+      "storage",
+      "activeTab",
+      "scripting",
+      "identity.email"
+    ],
+    "background": {
+      "service_worker": "background.js"
+    },
+    "action": {
+      "default_popup": "popup.html",
+      "default_icon": {
+        "16": "icon16.png",
+        "48": "icon48.png",
+        "128": "icon128.png"
+      }
+    },
+    "oauth2": {
+      "client_id": "753505885020-5q1sq9bm7rtmiqj48gp667qqij44fn76.apps.googleusercontent.com",
+      "scopes": [
+        "https://www.googleapis.com/auth/gmail.readonly"
+      ]
+    },
+    "icons": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  }
