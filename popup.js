@@ -61,30 +61,42 @@ document.getElementById('loginBtn').addEventListener('click', () => {
 });
 
 // Sign out handler
-document.getElementById('logoutBtn').addEventListener('click', () => {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-        if (token) {
-            // Remove cached token
-            chrome.identity.removeCachedAuthToken({ token: token }, () => {
-                // Clear all relevant storage
-                chrome.storage.local.remove([
-                    'isSignedIn', 
-                    'gmailToken', 
-                    'lastOTP', 
-                    'lastOTPTime',
-                    'lastProcessedEmailId'
-                ], () => {
-                    updateUI(false);
-                    document.getElementById('lastOTP').style.display = 'none';
-                    console.log('Successfully signed out');
-                });
-            });
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+    try {
+        // Get current token if exists
+        const { gmailToken } = await chrome.storage.local.get(['gmailToken']);
+        
+        if (gmailToken) {
+            try {
+                // Revoke server-side token
+                await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${gmailToken}`);
+            } catch (revokeError) {
+                console.log("Revoke error (non-critical):", revokeError);
+            }
             
-            // Revoke server-side token
-            fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`)
-                .catch(error => console.error('Revoke error:', error));
+            // Remove cached token
+            await chrome.identity.removeCachedAuthToken({ token: gmailToken });
         }
-    });
+        
+        // Clear all cached tokens
+        await chrome.identity.clearAllCachedAuthTokens();
+        
+        // Clear all relevant storage
+        await chrome.storage.local.remove([
+            'isSignedIn', 
+            'gmailToken', 
+            'lastOTP', 
+            'lastOTPTime',
+            'lastProcessedEmailId',
+            'lastSender'
+        ]);
+        
+        updateUI(false);
+        document.getElementById('lastOTP').style.display = 'none';
+        console.log('Successfully signed out');
+    } catch (error) {
+        console.error('Logout error:', error);
+    }
 });
 
 // Fill OTP handler

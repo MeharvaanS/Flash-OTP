@@ -18,24 +18,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Handle Google authentication
 function handleAuthentication(sendResponse) {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-        if (chrome.runtime.lastError) {
-            console.log("Auth error:", chrome.runtime.lastError);
-            sendResponse({ success: false, error: chrome.runtime.lastError.message });
-            return;
-        }
-        
-        if (!token) {
-            sendResponse({ success: false, error: "No token received" });
-            return;
-        }
-        
-        console.log("🔑 Token received");
-        chrome.storage.local.set({ 
-            gmailToken: token,
-            isSignedIn: true
+    // Clear all cached tokens to force fresh login
+    chrome.identity.clearAllCachedAuthTokens(() => {
+        // Get new token with interactive=true
+        chrome.identity.getAuthToken({ interactive: true }, (token) => {
+            if (chrome.runtime.lastError) {
+                console.log("Auth error:", chrome.runtime.lastError);
+                sendResponse({ success: false, error: chrome.runtime.lastError.message });
+                return;
+            }
+            
+            if (!token) {
+                sendResponse({ success: false, error: "No token received" });
+                return;
+            }
+            
+            console.log("🔑 Token received");
+            chrome.storage.local.set({ 
+                gmailToken: token,
+                isSignedIn: true
+            });
+            sendResponse({ success: true });
         });
-        sendResponse({ success: true });
     });
 }
 

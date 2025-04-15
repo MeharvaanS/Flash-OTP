@@ -22,9 +22,11 @@
       }
     },
     "oauth2": {
-      "client_id": "753505885020-5q1sq9bm7rtmiqj48gp667qqij44fn76.apps.googleusercontent.com",
+      "client_id": "753505885020-p9p1jn12qhqi5orc1qqosqm5q1o2oj2u.apps.googleusercontent.com",
       "scopes": [
-        "https://www.googleapis.com/auth/gmail.readonly"
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "openid",
+        "email"
       ]
     },
     "icons": {
