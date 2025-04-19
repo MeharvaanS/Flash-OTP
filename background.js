@@ -1,250 +1,378 @@
-// Track last filled OTP globally
-let lastFilledOTP = null;
-
-// Handle authentication and messages
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "authenticate") {
-        handleAuthentication(sendResponse);
-        return true;
-    }
-    
-    if (request.action === "checkOTP") {
-        checkForOTPEmails().then((result) => {
-            sendResponse(result);
-        });
-        return true;
-    }
-});
-
-// Handle Google authentication
-function handleAuthentication(sendResponse) {
-    // Clear all cached tokens to force fresh login
-    chrome.identity.clearAllCachedAuthTokens(() => {
-        // Get new token with interactive=true
-        chrome.identity.getAuthToken({ interactive: true }, (token) => {
-            if (chrome.runtime.lastError) {
-                console.log("Auth error:", chrome.runtime.lastError);
-                sendResponse({ success: false, error: chrome.runtime.lastError.message });
-                return;
-            }
-            
-            if (!token) {
-                sendResponse({ success: false, error: "No token received" });
-                return;
-            }
-            
-            console.log("🔑 Token received");
-            chrome.storage.local.set({ 
-                gmailToken: token,
-                isSignedIn: true
-            });
-            sendResponse({ success: true });
-        });
-    });
-}
-
-// Enhanced OTP extraction with strict criteria
-function extractOTP(emailBody) {
+// Track authentication state
+let authState = {
+    token: null,
+    isAuthenticated: false
+  };
+  
+  // Initialize on extension startup
+  chrome.runtime.onStartup.addListener(initializeAuth);
+  chrome.runtime.onInstalled.addListener(initializeAuth);
+  
+  async function initializeAuth() {
     try {
-        let text = emailBody;
-        
-        // Parse email structure
-        if (typeof emailBody === 'object') {
-            const parts = emailBody.payload?.parts || [emailBody.payload];
-            text = parts.map(part => {
-                if (part.mimeType === "text/plain" && part.body?.data) {
-                    return atob(part.body.data.replace(/-/g, '+').replace(/_/g, '/'));
-                }
-                return '';
-            }).join('');
-
-            // Fallback to snippet if no plain text part found
-            if (!text.trim() && emailBody.snippet) {
-                text = emailBody.snippet;
-            }
-        }
-
-        // First check if email contains OTP-related keywords (case insensitive)
-        const otpKeywords = [
-            'one[- ]?time (?:passcode|password)',
-            'otp',
-            'verification code',
-            'authentication code',
-            'security code'
-        ];
-        
-        const keywordPattern = new RegExp(otpKeywords.join('|'), 'i');
-        if (!keywordPattern.test(text)) {
-            return null; // Skip emails without OTP keywords
-        }
-
-        // Specialized pattern for codes with significant spacing
-        const spacedCodePattern = /(?:^|\n|\r)[\s-]*([A-Z0-9]{6,10})[\s-]*(?:$|\n|\r)/;
-        
-        // Alternative patterns if the first one fails
-        const fallbackPatterns = [
-            // Pattern for labeled codes with spacing
-            /(?:one[- ]?time (?:passcode|password)|OTP|verification code)[\s:]*([A-Z0-9]{6,10})(?=\s|$|\.|,|\)|\n|\r)/i,
-            
-            // General standalone code pattern
-            /(?:^|\s)([A-Z0-9]{6,10})(?:$|\s|\.|,|\)|\n|\r)/
-        ];
-
-        // Try the spaced pattern first
-        let match = text.match(spacedCodePattern);
-        if (match) {
-            return match[1];
-        }
-
-        // Fallback to other patterns if needed
-        for (const pattern of fallbackPatterns) {
-            match = text.match(pattern);
-            if (match) {
-                return match[1];
-            }
-        }
-        
-        return null;
+      await chrome.identity.clearAllCachedAuthTokens();
+      authState = {
+        token: null,
+        isAuthenticated: false
+      };
+      await chrome.storage.local.remove(['gmailToken', 'isSignedIn']);
     } catch (error) {
-        console.log("OTP extraction error:", error);
-        return null;
+      console.log("Initialization error:", error);
     }
-}
-
-// Fetch email content
-async function fetchEmailContent(token, messageId) {
-    const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}?format=full`, {
-        headers: { 'Authorization': `Bearer ${token}` }
-    });
-    return await response.json();
-}
-
-// Main OTP checking function
-async function checkForOTPEmails() {
-    console.log("\n===== 🔄 OTP Check at:", new Date().toLocaleTimeString(), "=====");
+  }
+  
+  // Message handler with proper error trapping
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    const handleAsync = async () => {
+      try {
+        switch (request.action) {
+          case "authenticate":
+            return await handleAuthentication();
+          case "checkOTP":
+            return await checkForOTPEmails();
+          case "refreshToken":
+            return await refreshToken();
+          default:
+            return { success: false, error: "Unknown action" };
+        }
+      } catch (error) {
+        console.log("Message handler error:", error);
+        return { 
+          success: false, 
+          error: error.message || "An unexpected error occurred" 
+        };
+      }
+    };
+  
+    handleAsync().then(sendResponse);
+    return true; // Keep message channel open
+  });
+  
+  // Improved authentication handler
+  async function handleAuthentication() {
+    try {
+      // Clear any existing tokens
+      await chrome.identity.clearAllCachedAuthTokens();
+      
+      // Get new token with proper error handling
+      const token = await new Promise((resolve, reject) => {
+        chrome.identity.getAuthToken({ interactive: true }, (token) => {
+          if (chrome.runtime.lastError) {
+            const err = chrome.runtime.lastError;
+            if (err.message.includes('OAuth2 not granted or revoked')) {
+              console.log("User denied OAuth permission");
+              resolve(null);
+            } else {
+              reject(err);
+            }
+          } else {
+            resolve(token);
+          }
+        });
+      });
+  
+      if (!token) {
+        return { success: false, error: "Authentication denied by user" };
+      }
+  
+      authState = {
+        token,
+        isAuthenticated: true
+      };
+  
+      await chrome.storage.local.set({ 
+        gmailToken: token,
+        isSignedIn: true 
+      });
+  
+      return { success: true };
+    } catch (error) {
+      console.log("Authentication failed:", error);
+      return { 
+        success: false, 
+        error: "Authentication failed" 
+      };
+    }
+  }
+  
+  // Token management with robust error handling
+  async function refreshToken() {
+    try {
+      // First try silent refresh
+      const token = await new Promise((resolve, reject) => {
+        chrome.identity.getAuthToken({ interactive: false }, (token) => {
+          if (chrome.runtime.lastError) {
+            const err = chrome.runtime.lastError;
+            if (err.message.includes('OAuth2 not granted or revoked')) {
+              console.log("Silent refresh failed - needs user interaction");
+              resolve(null);
+            } else {
+              reject(err);
+            }
+          } else {
+            resolve(token);
+          }
+        });
+      });
+  
+      if (token && await verifyToken(token)) {
+        authState.token = token;
+        await chrome.storage.local.set({ gmailToken: token });
+        return { success: true, token };
+      }
+  
+      // Fall back to interactive auth if silent fails
+      return await handleAuthentication();
+    } catch (error) {
+      console.log("Token refresh failed:", error);
+      return { 
+        success: false, 
+        error: error.message || "Token refresh failed" 
+      };
+    }
+  }
+  
+  async function verifyToken(token) {
+    try {
+      const response = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${token}`);
+      if (!response.ok) {
+        throw new Error(`Token verification failed: ${response.status}`);
+      }
+      return true;
+    } catch (error) {
+      console.log("Token verification error:", error);
+      return false;
+    }
+  }
+  
+  // OTP checking with comprehensive error handling
+  async function checkForOTPEmails() {
+    try {
+      // Ensure we have a valid token
+      let token = authState.token;
+      if (!token || !(await verifyToken(token))) {
+        const refreshResult = await refreshToken();
+        if (!refreshResult.success) {
+          return refreshResult;
+        }
+        token = refreshResult.token;
+      }
+  
+      // Search for OTP emails with broader criteria
+      const query = "is:unread (OTP OR verification OR code OR passcode) newer_than:1h";
+      const response = await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=5`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` },
+          timeout: 10000 // 10 second timeout
+        }
+      );
+  
+      if (!response.ok) {
+        throw new Error(`Gmail API error: ${response.status}`);
+      }
+  
+      const { messages } = await response.json();
+      
+      if (!messages?.length) {
+        return { success: false, error: "No recent OTP found" };
+      }
+  
+      // Process messages with error handling for each
+      for (const message of messages) {
+        try {
+          const email = await fetchEmailContent(token, message.id);
+          const otp = extractOTP(email);
+          
+          if (otp) {
+            const senderName = extractSenderName(email);
+            await processValidOTP(token, message.id, otp, senderName);
+            return { success: true, otp, sender: senderName };
+          }
+        } catch (emailError) {
+          console.log("Error processing email:", emailError);
+          continue;
+        }
+      }
+  
+      return { success: false, error: "No valid OTP found in emails" };
+  
+    } catch (error) {
+      console.log("OTP check failed:", error);
+      
+      // Handle specific error cases
+      if (error.message.includes('401')) {
+        await clearAuthData();
+        return { 
+          success: false, 
+          error: "Session expired. Please sign in again." 
+        };
+      }
+      
+      return { 
+        success: false, 
+        error: error.message || "Failed to check for OTP emails" 
+      };
+    }
+  }
+  
+  // Helper functions with error handling
+  async function fetchEmailContent(token, messageId) {
+    const response = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}`,
+      {
+        headers: { 'Authorization': `Bearer ${token}` },
+        timeout: 10000
+      }
+    );
     
-    // Clear all previous tracking data
-    await chrome.storage.local.remove([
+    if (!response.ok) {
+      throw new Error(`Failed to fetch email: ${response.status}`);
+    }
+    
+    return await response.json();
+  }
+  
+  function extractOTP(emailBody) {
+    try {
+      const text = parseEmailContent(emailBody);
+      const patterns = [
+        /(?:^|\n|\r)[\s-]*([A-Z0-9]{6,10})[\s-]*(?:$|\n|\r)/,
+        /(?:OTP|verification code)[\s:]*([A-Z0-9]{6,10})/i,
+        /(?:^|\s)([A-Z0-9]{6,10})(?:$|\s)/
+      ];
+  
+      for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) return match[1];
+      }
+      return null;
+    } catch (error) {
+      console.log("OTP extraction failed:", error);
+      return null;
+    }
+  }
+  
+  function parseEmailContent(email) {
+    try {
+      const parts = email.payload?.parts || [email.payload];
+      const textParts = parts.map(part => {
+        if (part.mimeType === "text/plain" && part.body?.data) {
+          try {
+            return atob(part.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+          } catch {
+            return '';
+          }
+        }
+        return '';
+      });
+      return textParts.join('') || email.snippet || '';
+    } catch {
+      return email.snippet || '';
+    }
+  }
+  
+  function extractSenderName(email) {
+    try {
+      const fromHeader = email.payload.headers?.find(h => h.name === "From")?.value || "";
+      return fromHeader
+        .replace(/<[^>]*>/g, '')
+        .replace(/["']/g, '')
+        .trim()
+        .split('@')[0] 
+        || "unknown sender";
+    } catch {
+      return "unknown sender";
+    }
+  }
+  
+  async function processValidOTP(token, emailId, otp, sender) {
+    await Promise.all([
+      saveOTPData(emailId, otp, sender),
+      autoFillOTP(otp),
+      markEmailAsRead(token, emailId)
+    ]);
+  }
+  
+  async function saveOTPData(emailId, otp, sender) {
+    await chrome.storage.local.set({
+      lastProcessedEmailId: emailId,
+      lastOTP: otp,
+      lastOTPTime: Date.now(),
+      lastSender: sender
+    });
+  }
+  
+  async function autoFillOTP(otp) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+  
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: (otpToFill) => {
+          const inputs = [
+            ...document.querySelectorAll('input[type="text"], input[type="number"], input:not([type]), textarea')
+          ].filter(el => {
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          });
+          
+          if (inputs.length > 0) {
+            // Sort by visual position
+            inputs.sort((a, b) => {
+              const aRect = a.getBoundingClientRect();
+              const bRect = b.getBoundingClientRect();
+              return aRect.top - bRect.top || aRect.left - bRect.left;
+            });
+            
+            const target = inputs[0];
+            target.value = otpToFill;
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+            target.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        },
+        args: [otp]
+      });
+    } catch (error) {
+      console.log("Auto-fill failed:", error);
+    }
+  }
+  
+  async function markEmailAsRead(token, messageId) {
+    try {
+      await fetch(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`,
+        {
+          method: 'POST',
+          headers: { 
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json' 
+          },
+          body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+        }
+      );
+    } catch (error) {
+      console.log("Failed to mark email as read:", error);
+    }
+  }
+  
+  async function clearAuthData() {
+    try {
+      await chrome.identity.clearAllCachedAuthTokens();
+      await chrome.storage.local.remove([
+        'gmailToken', 
+        'isSignedIn',
         'lastProcessedEmailId',
         'lastOTP',
         'lastOTPTime',
         'lastSender'
-    ]);
-
-    const { gmailToken } = await chrome.storage.local.get(['gmailToken']);
-    if (!gmailToken) {
-        console.log("❌ No Gmail token");
-        return { success: false, error: "Not authenticated" };
-    }
-
-    try {
-        // Search only for brand new unread emails from the last 2 minutes
-        const query = "is:unread newer_than:2m";
-        const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}`, {
-            headers: { 'Authorization': `Bearer ${gmailToken}` }
-        });
-        
-        const data = await response.json();
-        if (!data.messages?.length) {
-            console.log("📭 No new OTP emails");
-            return { success: false, error: "No new OTP emails found" };
-        }
-
-        // Process messages from newest to oldest
-        for (const message of data.messages) {
-            const email = await fetchEmailContent(gmailToken, message.id);
-            const otp = extractOTP(email);
-            
-            if (otp) {
-                // Extract sender name from email headers
-                let senderName = "unknown sender";
-                const headers = email.payload.headers || [];
-                const fromHeader = headers.find(h => h.name === "From");
-                if (fromHeader) {
-                    // Clean up sender name (remove email and special characters)
-                    senderName = fromHeader.value
-                        .replace(/<[^>]*>/g, '') // Remove email part
-                        .replace(/["']/g, '')     // Remove quotes
-                        .replace(/\s{2,}/g, ' ')  // Remove extra spaces
-                        .trim();
-                    
-                    // If we're left with nothing (was just email), use a default
-                    if (!senderName) senderName = "a service";
-                }
-
-                console.log("🎉 Found NEW OTP:", otp, "from:", senderName);
-                
-                // Store the message ID and sender to prevent duplicate processing
-                await chrome.storage.local.set({ 
-                    lastProcessedEmailId: message.id,
-                    lastOTP: otp,
-                    lastOTPTime: Date.now(),
-                    lastSender: senderName
-                });
-
-                // Fill OTP in current tab
-                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-                if (tab?.id) {
-                    try {
-                        await chrome.scripting.executeScript({
-                            target: { tabId: tab.id },
-                            function: fillFirstInput,
-                            args: [otp]
-                        });
-                    } catch (error) {
-                        console.log("Failed to fill OTP:", error);
-                    }
-                }
-
-                // Immediately mark as read to prevent future detection
-                await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${message.id}/modify`, {
-                    method: 'POST',
-                    headers: { 
-                        'Authorization': `Bearer ${gmailToken}`,
-                        'Content-Type': 'application/json' 
-                    },
-                    body: JSON.stringify({ 
-                        removeLabelIds: ['UNREAD'],
-                        addLabelIds: ['TRASH'] // Optionally move to trash
-                    })
-                });
-                
-                return { success: true, otp: otp };
-            }
-        }
-        
-        return { success: false, error: "No valid OTP found in new emails" };
+      ]);
+      authState = {
+        token: null,
+        isAuthenticated: false
+      };
     } catch (error) {
-        console.log("💥 OTP check failed:", error);
-        return { success: false, error: "Error checking for OTP" };
+      console.log("Failed to clear auth data:", error);
     }
-}
-
-// Function to fill OTP in the first input field
-function fillFirstInput(otp) {
-    // Find the first non-hidden input element on the page
-    const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"])'));
-    const textareas = Array.from(document.querySelectorAll('textarea'));
-    const allFields = [...inputs, ...textareas].sort((a, b) => {
-        // Sort by visual position (top to bottom, left to right)
-        const rectA = a.getBoundingClientRect();
-        const rectB = b.getBoundingClientRect();
-        return rectA.top - rectB.top || rectA.left - rectB.left;
-    });
-
-    if (allFields.length > 0) {
-        const firstField = allFields[0];
-        console.log(allFields);
-        firstField.value = otp;
-        
-        // Trigger events to simulate real input
-        firstField.dispatchEvent(new Event('input', { bubbles: true }));
-        firstField.dispatchEvent(new Event('change', { bubbles: true }));
-        
-        console.log("✅ Filled OTP in first input field:", firstField);
-        return true;
-    }
-    
-    console.log("❌ No input field found");
-    return false;
-}
+  }
