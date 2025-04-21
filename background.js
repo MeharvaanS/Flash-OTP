@@ -5,7 +5,6 @@ let authState = {
   };
   
   // Initialize on extension startup
-  chrome.runtime.onStartup.addListener(initializeAuth);
   chrome.runtime.onInstalled.addListener(initializeAuth);
   
   async function initializeAuth() {
@@ -159,7 +158,7 @@ let authState = {
       }
   
       // Search for OTP emails with broader criteria
-      const query = "is:unread (OTP OR verification OR code OR passcode) newer_than:1h";
+      const query = "(OTP OR verification OR code OR passcode)";
       const response = await fetch(
         `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=5`,
         {
@@ -175,7 +174,7 @@ let authState = {
       const { messages } = await response.json();
       
       if (!messages?.length) {
-        return { success: false, error: "No recent OTP found" };
+        return { success: false, error: "No OTPs were found" };
       }
   
       // Process messages with error handling for each
