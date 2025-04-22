@@ -232,25 +232,73 @@ let authState = {
     return await response.json();
   }
   
-  function extractOTP(emailBody) {
-    try {
-      const text = parseEmailContent(emailBody);
-      const patterns = [
-        /(?:^|\n|\r)[\s-]*([A-Z0-9]{6,10})[\s-]*(?:$|\n|\r)/,
-        /(?:OTP|verification code)[\s:]*([A-Z0-9]{6,10})/i,
-        /(?:^|\s)([A-Z0-9]{6,10})(?:$|\s)/
-      ];
-  
-      for (const pattern of patterns) {
-        const match = text.match(pattern);
-        if (match) return match[1];
+  // Enhanced OTP extraction with strict criteria
+function extractOTP(emailBody) {
+  try {
+      let text = emailBody;
+      
+      // Parse email structure
+      if (typeof emailBody === 'object') {
+          const parts = emailBody.payload?.parts || [emailBody.payload];
+          text = parts.map(part => {
+              if (part.mimeType === "text/plain" && part.body?.data) {
+                  return atob(part.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+              }
+              return '';
+          }).join('');
+
+          // Fallback to snippet if no plain text part found
+          if (!text.trim() && emailBody.snippet) {
+              text = emailBody.snippet;
+          }
       }
+
+      // First check if email contains OTP-related keywords (case insensitive)
+      const otpKeywords = [
+          'one[- ]?time (?:passcode|password)',
+          'otp',
+          'verification code',
+          'authentication code',
+          'security code'
+      ];
+      
+      const keywordPattern = new RegExp(otpKeywords.join('|'), 'i');
+      if (!keywordPattern.test(text)) {
+          return null; // Skip emails without OTP keywords
+      }
+
+      // Specialized pattern for codes with significant spacing
+      const spacedCodePattern = /(?:^|\n|\r)[\s-]*([A-Z0-9]{6,10})[\s-]*(?:$|\n|\r)/;
+      
+      // Alternative patterns if the first one fails
+      const fallbackPatterns = [
+          // Pattern for labeled codes with spacing
+          /(?:one[- ]?time (?:passcode|password)|OTP|verification code)[\s:]*([A-Z0-9]{6,10})(?=\s|$|\.|,|\)|\n|\r)/i,
+          
+          // General standalone code pattern
+          /(?:^|\s)([A-Z0-9]{6,10})(?:$|\s|\.|,|\)|\n|\r)/
+      ];
+
+      // Try the spaced pattern first
+      let match = text.match(spacedCodePattern);
+      if (match) {
+          return match[1];
+      }
+
+      // Fallback to other patterns if needed
+      for (const pattern of fallbackPatterns) {
+          match = text.match(pattern);
+          if (match) {
+              return match[1];
+          }
+      }
+      
       return null;
-    } catch (error) {
-      console.log("OTP extraction failed:", error);
+  } catch (error) {
+      console.log("OTP extraction error:", error);
       return null;
-    }
   }
+}
   
   function parseEmailContent(email) {
     try {
