@@ -268,16 +268,17 @@ function extractOTP(emailBody) {
       }
 
       // Specialized pattern for codes with significant spacing
-      const spacedCodePattern = /(?:^|\n|\r)[\s-]*([A-Z0-9]{6,10})[\s-]*(?:$|\n|\r)/;
+      const spacedCodePattern = /(?:^|\n|\r)[\s-]*([A-Za-z0-9]{6,10})[\s-]*(?:$|\n|\r)/;
       
       // Alternative patterns if the first one fails
       const fallbackPatterns = [
-          // Pattern for labeled codes with spacing
-          /(?:one[- ]?time (?:passcode|password)|OTP|verification code)[\s:]*([A-Z0-9]{6,10})(?=\s|$|\.|,|\)|\n|\r)/i,
-          
-          // General standalone code pattern
-          /(?:^|\s)([A-Z0-9]{6,10})(?:$|\s|\.|,|\)|\n|\r)/
+        // Label-based match (case-insensitive), allowing 5–10 alphanumeric characters
+        /(?:one[- ]?time (?:passcode|password)|OTP(?: Code)?|verification code|authentication code|security code)[\s:]*([A-Za-z0-9]{5,10})/i,
+
+        // Standalone code fallback
+        /(?:^|\s)([A-Za-z0-9]{5,10})(?=\s|$|\.|,|\)|\n|\r)/
       ];
+
 
       // Try the spaced pattern first
       let match = text.match(spacedCodePattern);
